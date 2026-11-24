@@ -25,4 +25,4 @@ Event = Annotated[
     Field(discriminator = "type")
 ]
 
-event_parser = TypeAdapter
+event_parser = TypeAdapter(Event)
