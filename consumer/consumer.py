@@ -1,8 +1,20 @@
 import asyncio
-import json
+import logging
 
 import aio_pika
+from json_parser import CompanyUpserted, CompanyStruckOff, Event, event_parser
+from pydantic import ValidationError
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("app.log"),  # Write to a file
+        logging.StreamHandler()          # Print to the console
+    ]
+)
+
+logger = logging.getLogger(__name__)
 
 class Consumer:
     """
@@ -33,8 +45,17 @@ class Consumer:
             async with queue.iterator() as queue_iter:
                 async for message in queue_iter:
                     async with message.process():
-                        event = json.loads(message.body)
-                        print(event)
+                        try:
+                            event = event_parser.validate_json(message.body)
+                        except ValidationError as err:
+                            logger.warning("Invalid company event %s: %s", message.message_id, err)
+
+                        registration = event.registrationNumber.strip().upper()
+
+                        if isinstance(event, CompanyUpserted):
+                            description = event.data.natureOfBusiness
+
+                        print(f"Parsed {type(event).__name__}: {registration}")
 
 
 async def main():
@@ -47,7 +68,7 @@ async def main():
     queue_name = "company-events"
 
     consumer = Consumer(url, queue_name=queue_name)
-    await consumer.start()
+    await consumer.start(verbose=True)
 
 
 if __name__ == "__main__":
