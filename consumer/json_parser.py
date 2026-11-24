@@ -10,7 +10,7 @@ class CompanyData(BaseModel):
     industry: str | None = None
 
 class CompanyEvent(BaseModel):
-    registerationNumber: str
+    registrationNumber: str
     updatedAt: str | int | None = None
 
 class CompanyUpserted(CompanyEvent):
