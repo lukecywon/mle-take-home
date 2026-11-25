@@ -2,15 +2,16 @@ import asyncio
 import logging
 
 import aio_pika
-from json_parser import CompanyUpserted, CompanyStruckOff, Event, event_parser
+from .db import save_company, init_db
+from .json_parser import CompanyUpserted, CompanyStruckOff, Event, event_parser, parse_updated_at
 from pydantic import ValidationError
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler("app.log"),  # Write to a file
-        logging.StreamHandler()          # Print to the console
+        logging.FileHandler("app.log"),
+        logging.StreamHandler()
     ]
 )
 
@@ -29,6 +30,8 @@ class Consumer:
         """
         Starts the consumer
         """
+
+        await asyncio.to_thread(init_db)
 
         connection = await aio_pika.connect_robust(self.url)
 
@@ -49,11 +52,36 @@ class Consumer:
                             event = event_parser.validate_json(message.body)
                         except ValidationError as err:
                             logger.warning("Invalid company event %s: %s", message.message_id, err)
+                            continue
+
+                        try:
+                            updated_at = parse_updated_at(event.updatedAt)
+                        except (ValueError, OverflowError, OSError) as err:
+                            logger.warning("Invalid updatedAt for message %s: %s", message.message_id, err)
+                            continue
 
                         registration = event.registrationNumber.strip().upper()
 
                         if isinstance(event, CompanyUpserted):
-                            description = event.data.natureOfBusiness
+                            data = event.data
+                            await asyncio.to_thread(
+                                save_company,
+                                registration,
+                                updated_at,
+                                company_name = data.companyName,
+                                description = data.natureOfBusiness,
+                                state = data.state,
+                                industry = data.industry,
+                                embedding = None,
+                                is_active = True
+                            )
+                        else: # CompanyStruckOff event instead
+                            await asyncio.to_thread(
+                                save_company,
+                                registration,
+                                updated_at,
+                                is_active = False
+                            )
 
                         print(f"Parsed {type(event).__name__}: {registration}")
 
