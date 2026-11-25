@@ -15,6 +15,29 @@ class CompanyCard(BaseModel):
     state: str | None
     industry: str | None
 
+@app.get("/companies/{registration_number}", response_model=CompanyCard)
+def get_company(
+    registration_number: str
+):
+    registration_number = registration_number.strip().upper()
+
+    with Session(engine) as session:
+            company = session.get(Company, registration_number)
+
+            if company is None:
+                raise HTTPException(
+                    status_code = 404,
+                    detail = "Company with registeration number: " + registration_number + " not found."
+                )
+
+            if not company.is_active:
+               raise HTTPException(
+                   status_code = 404,
+                   detail = "Company with registeration number: " + registration_number + " exists but not active."
+               )
+
+            return company
+
 @app.get("/companies/{registration_number}/similar", response_model=list[CompanyCard])
 def similar_companies(
     registration_number: str,
