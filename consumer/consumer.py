@@ -3,6 +3,7 @@ import logging
 
 import aio_pika
 from .db import save_company, init_db
+from .embed import load_model, embed_description
 from .json_parser import CompanyUpserted, CompanyStruckOff, Event, event_parser, parse_updated_at
 from pydantic import ValidationError
 
@@ -31,8 +32,17 @@ class Consumer:
         Starts the consumer
         """
 
+        # Initialize table in DB
         await asyncio.to_thread(init_db)
 
+        # Load embedding model
+        if verbose:
+            print("Loading embedding model...")
+        model = await asyncio.to_thread(load_model)
+        if verbose:
+            print("Model finished loading")
+
+        # Start connection to RabbitMQ
         connection = await aio_pika.connect_robust(self.url)
 
         async with connection:
@@ -45,15 +55,18 @@ class Consumer:
             if verbose:
                 print("Queue: " + self.queue_name + " successfully connected")
 
+            # Iterate through queue
             async with queue.iterator() as queue_iter:
                 async for message in queue_iter:
                     async with message.process():
+                        # Validate JSON against defined format
                         try:
                             event = event_parser.validate_json(message.body)
                         except ValidationError as err:
                             logger.warning("Invalid company event %s: %s", message.message_id, err)
                             continue
 
+                        # Parse timestamp
                         try:
                             updated_at = parse_updated_at(event.updatedAt)
                         except (ValueError, OverflowError, OSError) as err:
@@ -62,8 +75,15 @@ class Consumer:
 
                         registration = event.registrationNumber.strip().upper()
 
+                        # Check event type
                         if isinstance(event, CompanyUpserted):
                             data = event.data
+
+                            # Embed description
+                            embedding = await asyncio.to_thread(
+                                embed_description, model, data.natureOfBusiness
+                            )
+
                             await asyncio.to_thread(
                                 save_company,
                                 registration,
@@ -72,7 +92,7 @@ class Consumer:
                                 description = data.natureOfBusiness,
                                 state = data.state,
                                 industry = data.industry,
-                                embedding = None,
+                                embedding = embedding,
                                 is_active = True
                             )
                         else: # CompanyStruckOff event instead
@@ -95,9 +115,13 @@ async def main():
     url = f"amqp://guest:guest@127.0.0.1:{port}/"
     queue_name = "company-events"
 
+    import time
+
+    start = time.perf_counter()
     consumer = Consumer(url, queue_name=queue_name)
     await consumer.start(verbose=True)
-
+    end = time.perf_counter()
+    print(f"Runtime: {end - start:.4f} seconds")
 
 if __name__ == "__main__":
     asyncio.run(main())
