@@ -2,7 +2,8 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import DateTime, text
-from sqlmodel import Field, SQLModel, create_engine
+from sqlalchemy.dialects.postgresql import insert
+from sqlmodel import Field, SQLModel, create_engine, Session
 
 
 class Company(SQLModel, table=True):
@@ -22,6 +23,24 @@ engine = create_engine(
     "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/companies"
 )
 
+def save_company(registration_number: str, updated_at: datetime, **changes) -> None:
+    table = Company.__table__
+
+    incoming = insert(table).values(
+        registration_number=registration_number,
+        updated_at=updated_at,
+        **changes
+    )
+
+    statement = incoming.on_conflict_do_update(
+        index_elements = [table.c.registration_number],
+        set_ = {**changes, "updated_at": incoming.excluded.updated_at},
+        where = incoming.excluded.updated_at > table.c.updated_at
+    )
+
+    with Session(engine) as session:
+        session.exec(statement)
+        session.commit()
 
 def init_db() -> None:
     with engine.begin() as connection:
