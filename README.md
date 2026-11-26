@@ -19,7 +19,7 @@ You need Docker with Compose and `uv`. Run these commands from the repo root. `u
    just consumer
    ```
 
-3. In a second terminal, publish the sample feed and start the API. Publishing finishes when RabbitMQ has accepted the messages. The consumer may still be processing them.
+3. In a second terminal, publish the sample feed and start the API. Publishing finishes when RabbitMQ has accepted the messages. The consumer may still be processing them. After publishing, the consumer will start embedding all the items in the queue, wait for this to finish before moving on to the next step.
 
    ```sh
    just publish
