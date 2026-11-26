@@ -115,13 +115,8 @@ async def main():
     url = f"amqp://guest:guest@127.0.0.1:{port}/"
     queue_name = "company-events"
 
-    import time
-
-    start = time.perf_counter()
     consumer = Consumer(url, queue_name=queue_name)
     await consumer.start(verbose=True)
-    end = time.perf_counter()
-    print(f"Runtime: {end - start:.4f} seconds")
 
 if __name__ == "__main__":
     asyncio.run(main())
