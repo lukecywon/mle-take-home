@@ -13,7 +13,7 @@ You need Docker with Compose and `uv`. Run these commands from the repo root. `u
    just up
    ```
 
-2. Start the consumer in one terminal and leave it running. It creates the database table, enables pgvector, and downloads the embedding model from Hugging Face on first use.
+2. Start the consumer in one terminal and leave it running. It creates the database table, enables pgvector, and downloads the embedding model from Hugging Face on first use. Wait for `Queue: company-events successfully connected`.
 
    ```sh
    just consumer
