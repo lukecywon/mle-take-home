@@ -1,197 +1,74 @@
-# MLE Take-Home: Company Recommendation System
+# Similar Companies API
 
-Welcome to the **Machine Learning Engineer** take-home from the OneCredit Data & AI team. It's a simplified version of
-a system we run in production, where it powers company recommendations and lead generation.
+The RabbitMQ consumer reads registry events, embeds English and Malay business descriptions on CPU, and stores company records and vectors in Postgres. The FastAPI service reads those records and ranks similar companies with pgvector. The [original assessment brief](README-OLD.md) and [design notes](DESIGN.md) are included here.
 
-**Who it's for:** people early in their career, with 0 to 2 years of experience. Fresh graduates are welcome.
+## Start locally
 
-If you applied, thanks for your time. If you didn't, we hope this helps you learn something new, such as RabbitMQ or
-pgvector.
+You need Docker with Compose and `uv`. Run these commands from the repo root. `uv` uses the project's Python 3.14 version. The app uses the default local ports `5432` for Postgres and `5672` for RabbitMQ. Keep those ports free before starting the stack.
 
-Assessment version: **2026.11** (`mle-v2026.11`). What changed between versions is in [`CHANGELOG.md`](CHANGELOG.md).
+1. Install the locked dependencies and start Postgres and RabbitMQ.
 
-## The scenario
+   ```sh
+   just setup
+   just up
+   ```
 
-When someone opens a company's page on the OneCredit portal, we want to show a **"Similar companies"** panel next to
-it. Someone looking at a coffee shop chain in Selangor should see other companies that do similar things.
+2. Start the consumer in one terminal and leave it running. It creates the database table, enables pgvector, and downloads the embedding model from Hugging Face on first use. Wait for `Queue: company-events successfully connected`.
 
-The registry team already publishes every company change to a RabbitMQ queue. Your job is to build the service that
-powers that panel from the feed.
+   ```sh
+   just consumer
+   ```
 
-### What the user sees
+3. In a second terminal, publish the sample feed and start the API. Publishing finishes when RabbitMQ has accepted the messages. The consumer may still be processing them.
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  OneCredit Portal                                         Search companies…  │
-├──────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Sinar Teguh Bakery Sdn. Bhd.                                   SYN-001550   │
-│  Food & Beverage · Selangor                                                  │
-│  Operating cafes and coffee shops in the Klang Valley                        │
-│                                                                              │
-│  Similar companies                                                           │
-│  ┌────────────────────────────────────┐  ┌────────────────────────────────┐  │
-│  │ Seri Sejahtera Food Sdn. Bhd.      │  │ Everbright Pacific Food        │  │
-│  │ Food & Beverage · Johor            │  │ Sdn. Bhd.                      │  │
-│  │                                    │  │ Food & Beverage · Kuala Lumpur │  │
-│  └────────────────────────────────────┘  └────────────────────────────────┘  │
-│  ┌────────────────────────────────────┐  ┌────────────────────────────────┐  │
-│  │ Gemilang Delima Food Sdn. Bhd.     │  │ Pacific Everbright Logistik    │  │
-│  │ Food & Beverage · Johor            │  │ PLT                            │  │
-│  │                                    │  │ Logistics · Kuala Lumpur       │  │
-│  └────────────────────────────────────┘  └────────────────────────────────┘  │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+   ```sh
+   just publish
+   just api
+   ```
 
-Clicking a card opens that company's page, with its own "Similar companies" panel.
+4. Open [the interactive API docs](http://127.0.0.1:8000/docs) or run the requests below (wait for the consumer to finish embedding before using the API). On Windows PowerShell, use `curl.exe` instead of `curl` if `curl` is aliased. For the complete sample results, wait for `company-events` to show zero **Ready** and **Unacked** messages in [RabbitMQ Management](http://127.0.0.1:15672), using `guest` / `guest`.
 
-### How it works for the user
+   ```sh
+   curl http://127.0.0.1:8000/companies/SYN-001550
+   curl "http://127.0.0.1:8000/companies/SYN-001550/similar?limit=4"
+   ```
 
-```mermaid
-sequenceDiagram
-    actor User as Portal user
-    participant Portal as OneCredit portal
-    participant Service as Your service
-    participant DB as Postgres + pgvector
-    User->>Portal: Opens the page for SYN-001550
-    Portal->>Service: Similar companies for SYN-001550
-    Service->>DB: Nearest neighbours of SYN-001550
-    DB-->>Service: Closest companies
-    Service-->>Portal: Similar companies, most similar first
-    Portal-->>User: Page with the "Similar companies" panel
-    User->>Portal: Clicks Seri Sejahtera Food Sdn. Bhd.
-    Portal->>Service: Similar companies for SYN-000539
+   Lookup returns one company. Recommendations return up to four by default, with a valid `limit` of 1–25. Unknown or struck-off companies return `404`. An active company without an embedding returns `[]` from `/similar`.
+
+## Run the tests
+
+With Postgres running, initialize pgvector if you have not started the consumer yet. Copy the example environment file once if you do not already have a `.env` file.
+
+```sh
+uv run --locked python -m consumer.db
 ```
 
-### How the data gets there
+In PowerShell:
 
-```mermaid
-flowchart LR
-    P[Registry feed<br/>producer] -->|company-events| Q[(RabbitMQ)]
-    Q --> C[Your consumer]
-    C -->|embed descriptions| E[Embedding model]
-    C --> D[(Postgres + pgvector<br/>similarity search)]
-    A[Your service] --> D
-    W[OneCredit portal] --> A
+```powershell
+Copy-Item .env.example .env
 ```
 
-### Notes from the registry team
+In Bash:
 
-> The feed merges a few upstream sources and we don't validate what they send. Delivery is at-least-once, and every
-> message has an AMQP `message_id`. Each event carries the time the change happened at the source in `updatedAt`. We own
-> the `company-events` queue and declare it as durable with no extra arguments. We can't change the format before your
-> launch, so please work with what's there.
-
-### What the portal needs
-
-- Recommendations that reflect the latest information we've received about each company.
-- No lost companies. If a company is in the feed, users expect to see it on the portal and in other companies'
-  recommendations.
-- Fast enough to render while the company page loads.
-
-## The task
-
-1. Build a **consumer** that reads the `company-events` queue and stores each company in Postgres, with an embedding
-   of its business description in pgvector.
-2. Build the **service** the portal calls: given a company, return its most similar companies, with what the portal
-   needs to draw each card in the mock above. Run the similarity search in Postgres with pgvector. Matching companies
-   on their nature of business is enough for a first version.
-3. Write a short `DESIGN.md` covering the decisions you made, the assumptions you made where the scenario was unclear,
-   what you would change to handle 10x the volume, and what's left.
-4. Optional, up to one hour of your six: go deeper in one area you're strong in. For example: how good the
-   recommendations are, latency at a realistic scale, how you'd monitor this in production, or a design for explaining
-   a recommendation with an LLM (a design only; no paid APIs). Write it up in `DESIGN.md`.
-
-The rest is your call: the schema, the embedding model, your tests and tooling, and the API, including what the portal
-gets back when something goes wrong. Tell us in your own README how to start your consumer and service, and we'll
-follow it.
-
-Where the scenario leaves something open, make a reasonable call and write it down. There isn't one right answer.
-
-## Embeddings
-
-Use an open-source embedding model that runs on a laptop CPU. Don't call a paid API. Some options:
-
-- `BAAI/bge-small-en-v1.5`, a small CPU model (384 dimensions), through
-  [fastembed](https://qdrant.github.io/fastembed/) or sentence-transformers. The panel in the mock above comes from it.
-- A placeholder while you build, such as a hashed bag-of-words vector, as long as you say so in `DESIGN.md`.
-
-## Getting started
-
-You need Docker, [uv](https://docs.astral.sh/uv/) (it installs Python 3.14 for you) and
-[just](https://github.com/casey/just). Setup takes about 5 minutes and doesn't count towards your time.
-
-```bash
-just setup      # install the producer's dependencies
-just up         # start Postgres (with pgvector) and RabbitMQ
-just publish    # publish the registry feed to the queue
-just down       # stop everything and delete the data
+```sh
+cp .env.example .env
 ```
 
-Postgres is at `postgresql://postgres:postgres@localhost:5432/companies`, and the RabbitMQ management UI is at
-http://localhost:15672 (user `guest`, password `guest`). If those ports are taken on your machine, export
-`POSTGRES_PORT`, `RABBITMQ_PORT` or `RABBITMQ_UI_PORT` in your shell before `just up`; `just publish` uses the same
-`RABBITMQ_PORT`.
+Then run the suite. The database-backed tests use isolated schemas and clean up after themselves. The broker, API server, and model download are unnecessary for this suite.
 
-`just publish` sends the whole feed every time you run it. To start again from an empty queue and database, run
-`just down` and then `just up`.
-
-## What's already here
-
-```
-.
-├── data/feed.jsonl        # the registry feed: 2,518 messages about 2,000 synthetic Malaysian companies, duplicates included
-├── producer/publish.py    # replays the feed onto the queue
-├── docker-compose.yml     # Postgres with pgvector, and RabbitMQ
-└── Justfile               # setup, up, publish, down
+```sh
+uv run --locked --env-file .env python -m unittest discover -s tests -v
 ```
 
-Add whatever else you need (`uv add` for libraries).
+## Run the embedding benchmark
 
-## How to submit
+```sh
+uv run --locked python benchmark_embeddings.py
+```
 
-1. Click **Use this template** → **Create a new repository**, and make it **public**. Any name is fine.
-2. Build your solution in your copy, with `DESIGN.md` at the top level.
-3. When you're done, fill in the [submission form](https://docs.google.com/forms/d/e/1FAIpQLSdjCsXP5jFrKrIi4krLVS8Sq0rhM4mLlhycpsAo34sSj4h3FA/viewform) with a link to your repo and your résumé.
+This measures model loading and local embedding time for the feed separately. It does not require Postgres or RabbitMQ.
 
-If the setup itself is broken (Docker, the services or the data won't start), open a
-[Setup problem](https://github.com/OneCreditMY/mle-take-home/issues/new?template=setup-problem.yml) issue. Issues are public, so don't put your
-solution or personal details in one.
+## Stop the stack
 
-## Time
-
-Plan for **4 to 6 hours**, within 7 days of creating your copy, and stop at 6 hours. If you run out of time,
-write down what you'd do next. A clear, honest "here's what's left" counts in your favour.
-
-## What we look at
-
-- Does it work, and does it keep working?
-- How you tested it.
-- How you reasoned about your choices and assumptions in `DESIGN.md`.
-- How readable your code is.
-
-We don't expect a perfect or complete solution.
-
-## Using AI tools
-
-Go ahead. Tell us in `DESIGN.md` which tools you used and for what. In the interview we'll ask you
-to walk us through your code, so make sure you understand everything you submit.
-
-## After you submit
-
-- We review your work as soon as we can.
-- If we move forward, the next interview is a walkthrough of your code with us.
-- Either way, you'll get written feedback by email.
-- Your repo stays yours. Keep it public as a portfolio piece if you like.
-
-## About the data
-
-Everything in this repo is synthetic. We generated it for this assessment.
-
-- The companies, names, registration numbers, descriptions and events are made up. Any resemblance to a real company
-  or person is a coincidence.
-- No OneCredit customer data, credit data or production data is in this repo, and none was used to create it.
-- Registration numbers use a made-up `SYN-` format, so they can't be mistaken for real Companies Commission of
-  Malaysia (SSM) numbers.
-- Your copy is public, so keep secrets, credentials and personal data out of it.
+Stop the API and consumer with `Ctrl+C` in their terminals, then run `just down` to stop Postgres and RabbitMQ while retaining your local data.

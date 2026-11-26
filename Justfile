@@ -17,3 +17,11 @@ down:
 # Replay the registry feed onto the company-events queue.
 publish:
     uv run python -m producer.publish
+
+# Start the consumer.
+consumer:
+    uv run python -m consumer.consumer
+
+# Start the API service.
+api:
+    uv run fastapi dev api/api.py
