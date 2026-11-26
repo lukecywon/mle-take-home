@@ -33,8 +33,10 @@ class Consumer:
             print("Starting consumer. Initializing Postgres...", flush=True)
         from .db import init_db, save_company # I chose to put imports here as these two in particular took a long time and made it seem like the program was hanging.
 
+        # Initialize table in DB
         await asyncio.to_thread(init_db)
 
+        # Load embedding model
         if verbose:
             print("Loading embedding model (first run may download model files)...", flush=True)
         from .embed import embed_description, load_model
@@ -43,6 +45,7 @@ class Consumer:
         if verbose:
             print("Embedding model ready. Connecting to RabbitMQ...", flush=True)
 
+        # Start connection to RabbitMQ
         connection = await aio_pika.connect_robust(self.url)
 
         async with connection:
